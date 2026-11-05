@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>クリスマス二角取り</title>
+<style>
+:root{--bg:#eef8f1;--bg2:#fde8e8;--ink:#5a2b2b;--tile:#fffdf8;--edge:#e3c9b0;--side:#c9a27a;--sel:#2e9e5b;--btn:#d9534f;--line:#e0384a}
+@media (prefers-color-scheme:dark){:root{--bg:#1d2b24;--bg2:#3a2226;--ink:#ffe8e8;--btn:#b8433f}}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;margin:0}
+body{background:radial-gradient(circle at 50% 0,var(--bg2),var(--bg));color:var(--ink);font-family:"Hiragino Maru Gothic ProN","Yu Gothic",system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;user-select:none;overflow:hidden;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+header{width:100%;padding:10px 14px 2px;font-weight:700;text-align:center}
+h1{font-size:16px;margin:0}
+#stat{display:flex;gap:14px;font-size:13px;font-weight:700;padding:2px 0}
+#time{font-variant-numeric:tabular-nums}
+#wrap{flex:1;display:flex;align-items:center;justify-content:center;width:100%}
+#board{position:relative}
+.t{position:absolute;background:var(--tile);border:2px solid var(--edge);border-radius:9px;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 0 var(--side);cursor:pointer;transition:transform .12s,opacity .25s}
+.t.sel{outline:3px solid var(--sel);transform:translateY(-2px) scale(1.1);z-index:5}
+.t.gone{opacity:0;transform:scale(1.5) rotate(10deg);pointer-events:none}
+.t.hint{animation:bn .5s 3}
+.t.shake{animation:sk .25s}
+@keyframes bn{50%{transform:translateY(-5px) scale(1.12);outline:3px solid #ffd54a}}
+@keyframes sk{25%{transform:translateX(-4px)}75%{transform:translateX(4px)}}
+svg{position:absolute;inset:0;pointer-events:none;z-index:9}
+svg polyline{fill:none;stroke:var(--line);stroke-linecap:round;stroke-linejoin:round}
+nav{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;padding:8px 10px 14px}
+button{background:var(--btn);color:#fff;border:0;border-radius:999px;padding:10px 13px;font:700 13px inherit;font-family:inherit;box-shadow:0 3px 0 rgba(0,0,0,.18)}
+button:active{transform:translateY(2px);box-shadow:none}
+#msg{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.35);z-index:99}
+#box{background:#fffaf0;color:#6b3f4f;border-radius:22px;padding:24px 28px;text-align:center;font-weight:700;font-size:18px;min-width:250px}
+#mbody{margin:8px 0 12px;font-size:15px;text-align:left;font-weight:600}
+#mbody label{display:flex;align-items:center;gap:10px;padding:7px 0}
+#mbody input{width:20px;height:20px;accent-color:#d9534f}
+.rk{display:flex;justify-content:space-between;gap:20px;padding:3px 0}
+.rk.me{color:#e0384a}
+button small{font-size:11px;opacity:.9}
+#bS.pulse{animation:pl 1s infinite}
+@keyframes pl{50%{transform:scale(1.12);background:#ff5c8a}}
+#toast{position:fixed;top:56px;background:var(--btn);color:#fff;padding:8px 16px;border-radius:999px;font-size:13px;opacity:0;transition:opacity .3s;z-index:50}
+</style>
+</head>
+<body>
+<header><h1>🎄 クリスマス二角取り</h1></header>
+<div id="stat"><span id="time"></span><span id="score"></span><span id="info"></span></div>
+<div id="wrap"><div id="board"></div></div>
+<nav><button id="bH">💡ヒント</button><button id="bS">🔀混ぜる</button><button id="bN">✨新規</button><button id="bT">🏆</button><button id="bG">⚙️</button></nav>
+<div id="toast"></div>
+<div id="msg"><div id="box"><div id="mt"></div><div id="mbody"></div><button id="bR"></button></div></div>
+<script>
+const R=12,C=11,H=R+2,W=C+2;
+const PIECE_SCALE=.92; // 駒の大きさ（小さくしたいときは値を下げる）
+const SCORE_BASE=10000,PER_SEC=20; // 得点 = 10000 − 20×（経過秒＋ペナルティ秒）。0点になるのは500秒
+const HINT_SEC=10,SHUFFLE_SEC=40;  // ヒント・シャッフルのペナルティ（秒換算）
+const MAX_ADJ=3;       // 同じ絵柄が隣り合う組の数：開始時に 0〜MAX_ADJ からランダム
+const K=["🎄","🎅","🤶","🦌","🎁","⛄","\u2744\uFE0F","⭐","🔔","\u{1F56F}\uFE0F","🧦","🧤","🧣","🍪","🥛","🍬","🍭","🎀","🛷","🍷","🍰","🍗","🧸","🥁","🎺","🧝","🐧","🏠","🥕","🍫","🥨","🎿","🍾"];
+const D=[[-1,0],[1,0],[0,-1],[0,1]];
+const $=id=>document.getElementById(id);
+const rnd=n=>Math.floor(Math.random()*n);
+/* 保存：localStorage → cookie → メモリ の順で冗長化し、ブラウザには永続化も要求する */
+const mem={};
+let canStore=true;
+try{localStorage.setItem("nikaku-t","1");localStorage.removeItem("nikaku-t")}catch(e){canStore=false}
+try{navigator.storage&&navigator.storage.persist&&navigator.storage.persist()}catch(e){}
+function load(k,d){
+  let v=null;
+  try{v=localStorage.getItem(k)}catch(e){}
+  if(v===null)try{const m=document.cookie.match(new RegExp("(?:^|; )"+k+"=([^;]*)"));if(m)v=decodeURIComponent(m[1])}catch(e){}
+  if(v===null&&mem[k]!==undefined)v=mem[k];
+  try{return JSON.parse(v)||d}catch(e){return d}
+}
+function save(k,o){
+  const v=JSON.stringify(o);mem[k]=v;
+  try{localStorage.setItem(k,v)}catch(e){}
+  try{document.cookie=k+"="+encodeURIComponent(v)+";max-age=31536000;path=/;SameSite=Lax"}catch(e){}
+}
+const S=Object.assign({sel:true,ok:true,ng:true,clear:true,bgm:true},load("nikaku-set",{}));
+let g,els,sel,busy,left,s=30,t0=null,tick=null,elapsed=0,okFn=null,pen=0,hintN=0,shufN=0,stuck=false,curHint=null;
+
+/* ---------- 経路探索：曲がり角2回以内（盤外の周回路も可） ---------- */
+function find(h,a,b){
+  function walk(r,c,d,t,pts){
+    let nr=r,nc=c;
+    for(;;){
+      nr+=D[d][0];nc+=D[d][1];
+      if(nr<0||nc<0||nr>=H||nc>=W)return null;
+      if(nr===b[0]&&nc===b[1])return pts.concat([[nr,nc]]);
+      if(h[nr][nc]!==-1)return null;
+      if(t<2){for(const e of(d<2?[2,3]:[0,1])){const res=walk(nr,nc,e,t+1,pts.concat([[nr,nc]]));if(res)return res}}
+    }
+  }
+  for(let d=0;d<4;d++){const p=walk(a[0],a[1],d,0,[a]);if(p)return p}
+  return null;
+}
+function shuf(a){for(let i=a.length-1;i>0;i--){const j=rnd(i+1);[a[i],a[j]]=[a[j],a[i]]}return a}
+const blank=()=>Array.from({length:H},()=>Array(W).fill(-1));
+
+/* ---------- 盤面生成 ----------
+   1) gen：つなげられる2枚を順に取り除いて「ペアの組み方」を作る（逆順構築なので必ず解ける）。
+      隣り合うペアは極力避ける。
+   2) assign：ペアに絵柄を割り当て、同じ絵柄が隣り合う組の数が target になるよう入れ替える。
+      解の構造（ペアの組み方）は変わらないので、入れ替えても解ける。 */
+function gen(cells){
+  for(let n=0;n<200;n++){
+    const h=blank();cells.forEach(([r,c])=>h[r][c]=0);
+    const live=cells.slice(),res=[];let ok=true;
+    while(live.length){
+      shuf(live);let best=null,fb=null;
+      outer:for(let i=0;i<live.length;i++)for(let j=i+1;j<live.length;j++){
+        const a=live[i],b=live[j],ad=Math.abs(a[0]-b[0])+Math.abs(a[1]-b[1])===1;
+        if(ad&&fb)continue;
+        if(find(h,a,b)){if(!ad){best=[i,j];break outer}fb=[i,j]}
+      }
+      const pk=best||fb;if(!pk){ok=false;break}
+      const [i,j]=pk,a=live[i],b=live[j];
+      res.push([a,b]);h[a[0]][a[1]]=-1;h[b[0]][b[1]]=-1;
+      live.splice(j,1);live.splice(i,1);
+    }
+    if(ok)return res;
+  }
+  return null;
+}
+function adj(h){
+  let n=0;
+  for(let r=1;r<=R;r++)for(let c=1;c<=C;c++){const k=h[r][c];if(k===-1)continue;if(h[r][c+1]===k)n++;if(h[r+1][c]===k)n++}
+  return n;
+}
+function assign(pairs,pool,target){
+  const p=shuf(pool.slice()),h=blank();
+  const put=i=>{const [a,b]=pairs[i];h[a[0]][a[1]]=p[i];h[b[0]][b[1]]=p[i]};
+  pairs.forEach((_,i)=>put(i));
+  let cnt=adj(h);
+  for(let it=0;it<8000&&cnt!==target;it++){
+    const i=rnd(p.length),j=rnd(p.length);if(p[i]===p[j])continue;
+    [p[i],p[j]]=[p[j],p[i]];put(i);put(j);
+    const nc=adj(h);
+    if(Math.abs(nc-target)<=Math.abs(cnt-target))cnt=nc;
+    else{[p[i],p[j]]=[p[j],p[i]];put(i);put(j)}
+  }
+  return h;
+}
+
+/* ---------- サウンド（WebAudioで合成。音声ファイル不要） ---------- */
+let AC=null,bgm=null;
+function audio(){
+  if(!AC){const A=window.AudioContext||window.webkitAudioContext;if(!A)return null;AC=new A()}
+  if(AC.state==="suspended")AC.resume();
+  return AC;
+}
+const hz=n=>261.63*Math.pow(2,n/12);
+function tone(f,at,d,type,v,dest){
+  const o=AC.createOscillator(),gn=AC.createGain(),t=AC.currentTime+at;
+  o.type=type;o.frequency.value=f;
+  gn.gain.setValueAtTime(.0001,t);gn.gain.exponentialRampToValueAtTime(v,t+.01);gn.gain.exponentialRampToValueAtTime(.0001,t+d);
+  o.connect(gn);gn.connect(dest||AC.destination);o.start(t);o.stop(t+d+.02);
+}
+function sfx(k){
+  if(!S[k]||!audio())return;
+  if(k==="sel")tone(880,0,.08,"sine",.15);
+  else if(k==="ok"){tone(660,0,.12,"triangle",.2);tone(990,.09,.2,"triangle",.2)}
+  else if(k==="ng"){tone(190,0,.16,"sawtooth",.07);tone(140,.11,.2,"sawtooth",.07)}
+  else if(k==="clear")[0,4,7,12,16,19,24].forEach((n,i)=>tone(hz(n+12),i*.11,.35,"triangle",.18));
+}
+const MEL=[12,null,16,null,19,null,16,null,17,null,14,null,17,19,16,null,14,null,17,null,21,null,17,null,19,null,16,14,12,null,null,null];
+const BASS=[-12,-7,-5,-12];
+function startBgm(){
+  if(bgm||!audio())return;
+  const out=AC.createGain();out.connect(AC.destination);
+  let step=0,next=AC.currentTime+.1;
+  const id=setInterval(()=>{
+    while(next<AC.currentTime+.4){
+      const at=next-AC.currentTime,m=MEL[step%32];
+      if(m!==null)tone(hz(m),at,.3,"triangle",.06,out);
+      if(step%4===0)tone(hz(BASS[Math.floor(step/8)%4]),at,.5,"sine",.07,out);
+      next+=.26;step++;
+    }
+  },100);
+  bgm={id,out};
+}
+function stopBgm(){
+  if(!bgm)return;
+  clearInterval(bgm.id);const o=bgm.out;
+  o.gain.setTargetAtTime(0,AC.currentTime,.05);setTimeout(()=>o.disconnect(),400);bgm=null;
+}
+document.addEventListener("pointerdown",()=>{if(audio()&&S.bgm)startBgm()});
+document.addEventListener("visibilitychange",()=>{if(AC)document.hidden?AC.suspend():AC.resume()});
+
+/* ---------- タイマーとランキング ---------- */
+const fmt=t=>Math.floor(t/60)+":"+(t%60).toFixed(1).padStart(4,"0");
+const score=t=>Math.max(0,Math.round(SCORE_BASE-t*PER_SEC));
+function showTime(){
+  elapsed=(t0===null?0:(Date.now()-t0)/1000)+pen;
+  $("time").textContent="⏱ "+fmt(elapsed);$("score").textContent="⭐ "+score(elapsed).toLocaleString();
+}
+function startTimer(){if(t0===null){t0=Date.now();tick=setInterval(showTime,100)}}
+function stopTimer(){clearInterval(tick);showTime()}
+function penalty(sec,msg){startTimer();pen+=sec;showTime();toast(msg+"（−"+sec*PER_SEC+"点）")}
+function record(sc,t){
+  const a=load("nikaku-rank2",[]),e={s:sc,t,d:Date.now()};
+  a.push(e);a.sort((x,y)=>y.s-x.s);
+  const i=a.indexOf(e);save("nikaku-rank2",a.slice(0,3));return i<3?i:-1;
+}
+function rankHtml(me){
+  const a=load("nikaku-rank2",[]);
+  const note=!canStore?"※この環境では記録を保存できません（プレビュー表示やプライベートブラウズなど）。通常のブラウザでhttpsから開くと保持されます。":location.protocol==="file:"?"※ファイルを直接開いていると、ブラウザによっては記録が消えます。GitHub Pagesなどhttpsで開くと保持されます。":"";
+  const nh=note?'<div style="font-size:11px;font-weight:400;opacity:.8;margin-top:8px;max-width:250px">'+note+"</div>":"";
+  if(!a.length)return '<div class="rk">まだ記録がありません</div>'+nh;
+  return a.map((r,i)=>'<div class="rk'+(i===me?' me':'')+'"><span>'+["🥇","🥈","🥉"][i]+" "+r.s.toLocaleString()+"点</span><span>"+fmt(r.t)+" "+new Date(r.d).toLocaleDateString("ja-JP",{month:"numeric",day:"numeric"})+(i===me?" NEW!":"")+"</span></div>").join("")+nh;
+}
+
+/* ---------- ダイアログ ---------- */
+function showBox(title,body,btn,fn){
+  $("mt").textContent=title;$("mbody").innerHTML=body;$("bR").textContent=btn;okFn=fn;$("msg").style.display="flex";
+}
+$("bR").onclick=()=>{$("msg").style.display="none";if(okFn)okFn()};
+const SET=[["sel","駒を選択したとき"],["ok","揃ったとき"],["ng","揃わなかったとき"],["clear","クリア時"],["bgm","BGM"]];
+function settings(){
+  showBox("⚙️ サウンド設定",SET.map(([k,n])=>'<label><input type="checkbox" data-k="'+k+'"'+(S[k]?" checked":"")+">"+n+"</label>").join(""),"とじる",null);
+  $("mbody").querySelectorAll("input").forEach(i=>i.onchange=()=>{
+    S[i.dataset.k]=i.checked;save("nikaku-set",S);
+    if(i.dataset.k==="bgm")i.checked?startBgm():stopBgm();
+  });
+}
+
+/* ---------- ゲーム本体 ---------- */
+function newGame(){
+  clearInterval(tick);t0=null;pen=hintN=shufN=0;stuck=false;curHint=null;$("bS").classList.remove("pulse");showTime();
+  const cells=[];for(let r=1;r<=R;r++)for(let c=1;c<=C;c++)cells.push([r,c]);
+  const pairs=gen(cells),pool=[];K.forEach((_,k)=>pool.push(k,k)); // 1種類につき2ペア（4枚）
+  g=assign(pairs,pool,rnd(MAX_ADJ+1));
+  left=pairs.length;sel=null;busy=false;$("msg").style.display="none";build();
+}
+function paint(e,k){e.textContent=K[k];e.style.background="hsl("+(k*11)+",85%,93%)"}
+function build(){
+  const b=$("board");b.innerHTML="";els={};
+  for(let r=1;r<=R;r++)for(let c=1;c<=C;c++){
+    const d=document.createElement("div");d.className="t";paint(d,g[r][c]);
+    d.onclick=()=>tap(r,c);b.appendChild(d);els[r*100+c]=d;
+  }
+  const sv=document.createElementNS("http://www.w3.org/2000/svg","svg");sv.id="sv";b.appendChild(sv);
+  layout();info();
+}
+function layout(){
+  s=Math.floor(Math.min((innerWidth-16)/(C+.8),(innerHeight-200)/(R+.8),44)*PIECE_SCALE);
+  const b=$("board");b.style.width=(C+.8)*s+"px";b.style.height=(R+.8)*s+"px";
+  for(const k in els){const r=Math.floor(k/100),c=k%100,d=els[k];
+    d.style.width=s-3+"px";d.style.height=s-3+"px";
+    d.style.left=(.4+c-1)*s+1.5+"px";d.style.top=(.4+r-1)*s+1.5+"px";d.style.fontSize=s*.6+"px";}
+}
+const px=(i,n)=>i===0?.2*s:i===n+1?(n+.6)*s:(.4+i-.5)*s;
+function info(){$("info").textContent="のこり "+left+" ペア"}
+function tap(r,c){
+  if(busy||g[r][c]===-1)return;
+  startTimer();
+  const e=els[r*100+c];
+  if(!sel){sel=[r,c];e.classList.add("sel");sfx("sel");return}
+  const [sr,sc]=sel,se=els[sr*100+sc];
+  if(sr===r&&sc===c){sel=null;e.classList.remove("sel");return}
+  if(g[sr][sc]===g[r][c]){const p=find(g,[sr,sc],[r,c]);if(p){remove(p,[sr,sc],[r,c]);return}}
+  se.classList.remove("sel");e.classList.remove("shake");void e.offsetWidth;e.classList.add("shake");
+  sel=[r,c];e.classList.add("sel");sfx("ng");
+}
+function remove(p,a,b){
+  busy=true;sfx("ok");
+  if(left===1)stopTimer();
+  $("sv").innerHTML='<polyline style="stroke-width:'+Math.max(3,s*.14)+'px" points="'+p.map(([r,c])=>px(c,C)+","+px(r,R)).join(" ")+'"/>';
+  setTimeout(()=>{
+    $("sv").innerHTML="";
+    for(const [r,c] of [a,b]){g[r][c]=-1;const e=els[r*100+c];e.classList.remove("sel");e.classList.add("gone")}
+    sel=null;left--;info();busy=false;
+    if(!left){
+      sfx("clear");const sc=score(elapsed),i=record(sc,elapsed);
+      showBox("🎉 クリア！ 🎉",'<div style="text-align:center;font-size:26px;margin:4px 0">⭐ '+sc.toLocaleString()+'点</div><div style="text-align:center;font-size:12px;margin-bottom:8px">タイム '+fmt(elapsed-pen)+" ＋ ペナルティ "+pen+"秒<br>（ヒント"+hintN+"回・シャッフル"+shufN+"回）</div>"+rankHtml(i),"もう一度あそぶ",newGame);
+      return;
+    }
+    curHint=null;
+    if(!findMove()){stuck=true;$("bS").classList.add("pulse");toast("手詰まり！🔀混ぜるで続行できるよ（−"+SHUFFLE_SEC*PER_SEC+"点）",3500)}
+  },320);
+}
+function findMove(){
+  const cells=[];
+  for(let r=1;r<=R;r++)for(let c=1;c<=C;c++)if(g[r][c]!==-1)cells.push([r,c]);
+  shuf(cells);
+  for(let i=0;i<cells.length;i++)for(let j=i+1;j<cells.length;j++){
+    const a=cells[i],b=cells[j];
+    if(g[a[0]][a[1]]===g[b[0]][b[1]]&&find(g,a,b))return [a,b];
+  }
+  return null;
+}
+function hint(){
+  if(busy)return;
+  let m=curHint;
+  // 直前に出したヒントがまだ有効なら、再表示のみ（追加の減点なし）
+  if(!(m&&m.every(([r,c])=>g[r][c]!==-1)&&g[m[0][0]][m[0][1]]===g[m[1][0]][m[1][1]]&&find(g,m[0],m[1]))){
+    m=findMove();
+    if(!m){toast("つなげられるペアがないよ。🔀混ぜるを使ってね");return}
+    curHint=m;hintN++;penalty(HINT_SEC,"💡ヒント");
+  }
+  m.forEach(([r,c])=>{const e=els[r*100+c];e.classList.remove("hint");void e.offsetWidth;e.classList.add("hint")});
+}
+function shuffle(){
+  if(busy)return;
+  if(findMove()&&!confirm("まだ消せるペアがあります。混ぜると −"+SHUFFLE_SEC*PER_SEC+"点 です。混ぜますか？"))return;
+  const cells=[],cnt={};
+  for(let r=1;r<=R;r++)for(let c=1;c<=C;c++)if(g[r][c]!==-1){cells.push([r,c]);cnt[g[r][c]]=(cnt[g[r][c]]||0)+1}
+  const pairs=gen(cells);if(!pairs)return;
+  const pool=[];for(const k in cnt)for(let n=0;n<cnt[k]/2;n++)pool.push(+k);
+  g=assign(pairs,pool,rnd(MAX_ADJ+1));
+  if(sel){els[sel[0]*100+sel[1]].classList.remove("sel");sel=null}
+  cells.forEach(([r,c])=>paint(els[r*100+c],g[r][c]));
+  curHint=null;stuck=false;$("bS").classList.remove("pulse");shufN++;
+  penalty(SHUFFLE_SEC,"🔀混ぜました");
+}
+function toast(t,ms){const e=$("toast");e.textContent=t;e.style.opacity=1;setTimeout(()=>e.style.opacity=0,ms||1800)}
+$("bH").onclick=hint;
+$("bS").onclick=shuffle;
+$("bN").onclick=newGame;
+$("bT").onclick=()=>showBox("🏆 ハイスコア TOP3",rankHtml(-1),"とじる",null);
+$("bG").onclick=settings;
+$("bH").innerHTML="💡ヒント <small>−"+HINT_SEC*PER_SEC+"</small>";
+$("bS").innerHTML="🔀混ぜる <small>−"+SHUFFLE_SEC*PER_SEC+"</small>";
+addEventListener("resize",layout);
+newGame();
+</script>
+</body>
+</html>
